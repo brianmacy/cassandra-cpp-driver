@@ -35,11 +35,13 @@ int Async::start(uv_loop_t* loop, const Async::Callback& callback) {
 }
 
 void Async::send() {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (handle_ == NULL) return;
   uv_async_send(handle_);
 }
 
 void Async::close_handle() {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (handle_ == NULL) return;
   uv_close(reinterpret_cast<uv_handle_t*>(handle_), on_close);
   handle_ = NULL;

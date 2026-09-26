@@ -23,6 +23,8 @@
 
 #include <uv.h>
 
+#include <mutex>
+
 namespace datastax { namespace internal { namespace core {
 
 /**
@@ -72,6 +74,7 @@ private:
 private:
   AllocatedT<uv_async_t>* handle_;
   Callback callback_;
+  std::mutex mutex_; // guards handle_ between send() (any thread) and close_handle() (loop thread)
 
 private:
   DISALLOW_COPY_AND_ASSIGN(Async);
