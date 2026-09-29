@@ -183,6 +183,17 @@ struct ControlConnectionSettings {
   bool use_token_aware_routing;
 
   /**
+   * If true then the cluster maintains a YugabyteDB tablet-leader map (system.partitions) and
+   * attaches it to the token map for YbPartitionAwarePolicy. Off by default.
+   */
+  bool use_yb_partition_aware_routing;
+
+  /**
+   * How often the YugabyteDB tablet-leader map is refreshed (milliseconds).
+   */
+  uint64_t yb_partitions_refresh_interval_ms;
+
+  /**
    * A factory for creating addresses (for the connection process).
    */
   AddressFactory::Ptr address_factory;

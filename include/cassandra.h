@@ -2239,6 +2239,56 @@ cass_cluster_set_token_aware_routing_shuffle_replicas(CassCluster* cluster,
                                                       cass_bool_t enabled);
 
 /**
+ * Enable YugabyteDB partition-aware routing (YugabyteDB only; this is a Senzing
+ * fork extension, not part of the upstream DataStax API).
+ *
+ * The cluster reads the tablet leaders from YugabyteDB's system.partitions
+ * table on the control connection and refreshes them periodically (and shortly
+ * after any keyspace or table schema change). An EXECUTE of a prepared statement
+ * whose partition-key columns are all bound (INT, BIGINT, TEXT/VARCHAR or BLOB)
+ * is then sent to the leader of the tablet that owns its YugabyteDB partition
+ * hash first, which avoids a tserver-to-leader proxy hop; a BATCH is routed by
+ * its first such statement. Every other request, or any request whose leader is
+ * unknown or down, uses the plan of the policy this one wraps.
+ *
+ * The leader map rides the token map snapshot, so token-aware routing
+ * (cass_cluster_set_token_aware_routing(), on by default) and schema metadata
+ * (cass_cluster_set_use_schema(), on by default) must stay enabled. It applies to
+ * the default execution profile and to profiles without a load balancing policy
+ * of their own.
+ *
+ * <b>Default:</b> cass_false (disabled).
+ *
+ * @public @memberof CassCluster
+ *
+ * @param[in] cluster
+ * @param[in] enabled
+ *
+ * @see cass_cluster_set_yb_partition_aware_routing_refresh_interval()
+ */
+CASS_EXPORT void
+cass_cluster_set_yb_partition_aware_routing(CassCluster* cluster,
+                                            cass_bool_t enabled);
+
+/**
+ * Sets how often the YugabyteDB tablet-leader map is refreshed when YugabyteDB
+ * partition-aware routing is enabled (a Senzing fork extension).
+ *
+ * <b>Default:</b> 60 seconds.
+ *
+ * @public @memberof CassCluster
+ *
+ * @param[in] cluster
+ * @param[in] refresh_interval_secs Must be greater than zero.
+ * @return CASS_OK if successful, otherwise CASS_ERROR_LIB_BAD_PARAMS.
+ *
+ * @see cass_cluster_set_yb_partition_aware_routing()
+ */
+CASS_EXPORT CassError
+cass_cluster_set_yb_partition_aware_routing_refresh_interval(CassCluster* cluster,
+                                                             unsigned refresh_interval_secs);
+
+/**
  * Configures the cluster to use latency-aware request routing or not.
  *
  * <b>Default:</b> cass_false (disabled).

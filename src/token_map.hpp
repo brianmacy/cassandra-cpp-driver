@@ -21,6 +21,7 @@
 #include "ref_counted.hpp"
 #include "string.hpp"
 #include "string_ref.hpp"
+#include "yb_partition_map.hpp"
 
 namespace datastax { namespace internal { namespace core {
 
@@ -33,6 +34,8 @@ public:
   typedef SharedRefPtr<TokenMap> Ptr;
 
   static TokenMap::Ptr from_partitioner(StringRef partitioner);
+
+  TokenMap() {}
 
   virtual ~TokenMap() {}
 
@@ -54,6 +57,27 @@ public:
                                                  const String& routing_key) const = 0;
 
   virtual String dump(const String& keyspace_name) const = 0;
+
+  /**
+   * The YugabyteDB tablet-leader snapshot riding this token map (NULL unless YB partition-aware
+   * routing is enabled and a system.partitions refresh has succeeded). Set only on the cluster's
+   * event loop, on a token map that has not yet been published to the request processors; after
+   * publication it is read-only, so the request path reads it without a lock.
+   */
+  const YbPartitionMap::ConstPtr& yb_partitions() const { return yb_partitions_; }
+  void set_yb_partitions(const YbPartitionMap::ConstPtr& partitions) {
+    yb_partitions_ = partitions;
+  }
+
+protected:
+  // Implementations' copy constructors use this so copy() carries the YB partition snapshot.
+  // RefCounted is non-copyable, so the base is default-constructed (a fresh ref count).
+  TokenMap(const TokenMap& other)
+      : RefCounted<TokenMap>()
+      , yb_partitions_(other.yb_partitions_) {}
+
+private:
+  YbPartitionMap::ConstPtr yb_partitions_;
 };
 
 }}} // namespace datastax::internal::core

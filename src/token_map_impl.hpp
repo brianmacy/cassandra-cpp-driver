@@ -592,7 +592,8 @@ public:
   }
 
   TokenMapImpl(const TokenMapImpl& other)
-      : tokens_(other.tokens_)
+      : TokenMap(other)
+      , tokens_(other.tokens_)
       , hosts_(other.hosts_)
       , replicas_(other.replicas_)
       , strategies_(other.strategies_)

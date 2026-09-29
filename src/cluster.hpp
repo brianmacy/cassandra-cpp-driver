@@ -358,6 +358,7 @@ public:
 
 private:
   friend class ClusterRunClose;
+  friend class YbPartitionsRequestCallback;
   friend class ClusterNotifyUp;
   friend class ClusterNotifyDown;
   friend class ClusterStartEvents;
@@ -377,6 +378,13 @@ private:
   void handle_schedule_reconnect();
 
   void on_reconnect(ControlConnector* connector);
+
+private:
+  // YugabyteDB partition-aware routing (cluster event loop only).
+  void apply_yb_partitions();
+  void schedule_yb_partitions_refresh(uint64_t delay_ms);
+  void on_yb_partitions_timer(Timer* timer);
+  void handle_yb_partitions(unsigned generation, const ResultResponse::Ptr& result);
 
 private:
   void internal_close();
@@ -447,6 +455,14 @@ private:
   ScopedPtr<MonitorReporting> monitor_reporting_;
   Timer monitor_reporting_timer_;
   ScopedPtr<ReconnectionSchedule> reconnection_schedule_;
+  // Latest successful system.partitions result; rebuilt into each new token map.
+  ResultResponse::Ptr yb_partitions_result_;
+  Timer yb_partitions_timer_;
+  // A refresh query is outstanding; `yb_partitions_generation_` identifies the control connection
+  // it was sent on, so a reply from a replaced connection is ignored.
+  bool yb_partitions_in_flight_;
+  bool yb_partitions_requery_;
+  unsigned yb_partitions_generation_;
 };
 
 }}} // namespace datastax::internal::core

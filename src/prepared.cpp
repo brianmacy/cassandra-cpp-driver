@@ -19,6 +19,7 @@
 #include "execute_request.hpp"
 #include "external.hpp"
 #include "logger.hpp"
+#include "yb_partition_map.hpp"
 
 using namespace datastax;
 using namespace datastax::internal;
@@ -81,7 +82,8 @@ Prepared::Prepared(const ResultResponse::Ptr& result,
     , id_(result->prepared_id().to_string())
     , query_(prepare_request->query())
     , keyspace_(prepare_request->keyspace())
-    , request_settings_(prepare_request->settings()) {
+    , request_settings_(prepare_request->settings())
+    , yb_routable_(false) {
   assert(result->protocol_version() > 0 && "The protocol version should be set");
   if (result->protocol_version() >= CASS_PROTOCOL_VERSION_V4) {
     key_indices_ = result->pk_indices();
@@ -108,4 +110,35 @@ Prepared::Prepared(const ResultResponse::Ptr& result,
       }
     }
   }
+  compute_yb_routing();
+}
+
+void Prepared::compute_yb_routing() {
+  // Computed once per prepared statement, off the request path. Upstream behaviour does not
+  // depend on it: only YbPartitionAwarePolicy (off by default) reads these fields.
+  yb_routable_ = false;
+  if (key_indices_.empty()) return;
+  const ResultMetadata::Ptr& metadata = result_->metadata();
+  if (!metadata || metadata->column_count() == 0) return;
+
+  StringRef keyspace = result_->keyspace();
+  StringRef table = result_->table();
+  if (keyspace.empty() || table.empty()) { // No global table spec: use the first bind column's
+    keyspace = metadata->get_column_definition(0).keyspace;
+    table = metadata->get_column_definition(0).table;
+  }
+  if (keyspace.empty() || table.empty()) return;
+
+  for (ResultResponse::PKIndexVec::const_iterator it = key_indices_.begin(),
+                                                  end = key_indices_.end();
+       it != end; ++it) {
+    if (*it >= metadata->column_count()) return;
+    const DataType::ConstPtr& data_type = metadata->get_column_definition(*it).data_type;
+    if (!data_type || !yb_hash_type_supported(data_type->value_type())) return;
+  }
+
+  yb_ks_table_ = keyspace.to_string();
+  yb_ks_table_.push_back('.');
+  yb_ks_table_.append(table.data(), table.size());
+  yb_routable_ = true;
 }

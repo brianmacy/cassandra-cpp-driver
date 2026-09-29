@@ -307,12 +307,17 @@ static NopControlConnectionListener nop_listener__;
 ControlConnectionSettings::ControlConnectionSettings()
     : use_schema(CASS_DEFAULT_USE_SCHEMA)
     , use_token_aware_routing(CASS_DEFAULT_USE_TOKEN_AWARE_ROUTING)
+    , use_yb_partition_aware_routing(CASS_DEFAULT_YB_PARTITION_AWARE_ROUTING)
+    , yb_partitions_refresh_interval_ms(CASS_DEFAULT_YB_PARTITIONS_REFRESH_INTERVAL_SECS * 1000)
     , address_factory(new AddressFactory()) {}
 
 ControlConnectionSettings::ControlConnectionSettings(const Config& config)
     : connection_settings(config)
     , use_schema(config.use_schema())
     , use_token_aware_routing(config.token_aware_routing())
+    , use_yb_partition_aware_routing(config.yb_partition_aware_routing())
+    , yb_partitions_refresh_interval_ms(
+          static_cast<uint64_t>(config.yb_partitions_refresh_interval_secs()) * 1000)
     , address_factory(create_address_factory_from_config(config)) {}
 
 ControlConnector::ControlConnector(const Host::Ptr& host, ProtocolVersion protocol_version,

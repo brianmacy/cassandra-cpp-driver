@@ -24,6 +24,7 @@
 #include "round_robin_policy.hpp"
 #include "speculative_execution.hpp"
 #include "utils.hpp"
+#include "yb_partition_map.hpp"
 
 using namespace datastax;
 using namespace datastax::internal::core;
@@ -161,6 +162,53 @@ void ClusterEvent::process_events(const ClusterEvent::Vec& events, ClusterListen
 
 static NopClusterListener nop_cluster_listener__;
 
+// After a keyspace/table schema change, refresh the YB leader map this soon (the new table's
+// tablets need a moment to elect leaders). Each further change restarts the delay.
+static const uint64_t YB_PARTITIONS_SCHEMA_CHANGE_DELAY_MS = 1000;
+
+namespace datastax { namespace internal { namespace core {
+
+/**
+ * One system.partitions query on the control connection. Unlike the schema/topology refreshes, a
+ * failure here does NOT defunct the control connection: routing just keeps the previous leader
+ * map (or none), and requests keep working through the wrapped policy's plan.
+ */
+class YbPartitionsRequestCallback : public SimpleRequestCallback {
+public:
+  YbPartitionsRequestCallback(const Cluster::Ptr& cluster, unsigned generation)
+      : SimpleRequestCallback(SELECT_YB_PARTITIONS)
+      , cluster_(cluster)
+      , generation_(generation) {}
+
+private:
+  virtual void on_internal_set(ResponseMessage* response) {
+    if (response->opcode() == CQL_OPCODE_RESULT) {
+      cluster_->handle_yb_partitions(generation_, ResultResponse::Ptr(response->response_body()));
+    } else {
+      LOG_WARN("YB partition map refresh failed: unexpected response opcode %d "
+               "(is this a YugabyteDB cluster?)",
+               static_cast<int>(response->opcode()));
+      cluster_->handle_yb_partitions(generation_, ResultResponse::Ptr());
+    }
+  }
+
+  virtual void on_internal_error(CassError code, const String& message) {
+    LOG_WARN("YB partition map refresh failed: %s", message.c_str());
+    cluster_->handle_yb_partitions(generation_, ResultResponse::Ptr());
+  }
+
+  virtual void on_internal_timeout() {
+    LOG_WARN("YB partition map refresh timed out");
+    cluster_->handle_yb_partitions(generation_, ResultResponse::Ptr());
+  }
+
+private:
+  Cluster::Ptr cluster_;
+  unsigned generation_;
+};
+
+}}} // namespace datastax::internal::core
+
 LockedHostMap::LockedHostMap(const HostMap& hosts)
     : hosts_(hosts) {
   uv_mutex_init(&mutex_);
@@ -244,7 +292,10 @@ Cluster::Cluster(const ControlConnection::Ptr& connection, ClusterListener* list
     , hosts_(hosts)
     , local_dc_(local_dc)
     , supported_options_(supported_options)
-    , is_recording_events_(settings.disable_events_on_startup) {
+    , is_recording_events_(settings.disable_events_on_startup)
+    , yb_partitions_in_flight_(false)
+    , yb_partitions_requery_(false)
+    , yb_partitions_generation_(0) {
   inc_ref();
   connection_->set_listener(this);
 
@@ -252,6 +303,10 @@ Cluster::Cluster(const ControlConnection::Ptr& connection, ClusterListener* list
 
   update_schema(schema);
   update_token_map(hosts, connected_host_->partitioner(), schema);
+
+  // First leader map: queried right after connect (one control-connection round trip), not
+  // chained into the connect itself, so a failed partitions query can never fail the connect.
+  schedule_yb_partitions_refresh(0);
 
   listener_->on_reconnect(this);
 }
@@ -382,7 +437,75 @@ void Cluster::update_token_map(const HostMap& hosts, const String& partitioner,
       token_map_->add_host(it->second);
     }
     token_map_->build();
+    apply_yb_partitions();
   }
+}
+
+void Cluster::apply_yb_partitions() {
+  // Only ever called on a token map that has not been published yet (a fresh one, or the copy
+  // made right before a notify), so the request processors never see it change.
+  if (settings_.control_connection_settings.use_yb_partition_aware_routing && token_map_ &&
+      yb_partitions_result_) {
+    token_map_->set_yb_partitions(
+        YbPartitionMap::build(yb_partitions_result_.get(), hosts_, settings_.port));
+  }
+}
+
+void Cluster::schedule_yb_partitions_refresh(uint64_t delay_ms) {
+  if (!settings_.control_connection_settings.use_yb_partition_aware_routing || is_closing_ ||
+      !connection_) {
+    return;
+  }
+  yb_partitions_timer_.start(connection_->loop(), delay_ms,
+                             bind_callback(&Cluster::on_yb_partitions_timer, this));
+}
+
+void Cluster::on_yb_partitions_timer(Timer* timer) {
+  if (is_closing_ || !connection_) return;
+  if (yb_partitions_in_flight_) {
+    // The outstanding query may predate the change that triggered this refresh.
+    yb_partitions_requery_ = true;
+    return;
+  }
+  RequestCallback::Ptr callback(
+      new YbPartitionsRequestCallback(Cluster::Ptr(this), yb_partitions_generation_));
+  if (connection_->write_and_flush(callback) < 0) {
+    LOG_WARN("Unable to write the YB partition map query to the control connection");
+    schedule_yb_partitions_refresh(
+        settings_.control_connection_settings.yb_partitions_refresh_interval_ms);
+    return;
+  }
+  yb_partitions_in_flight_ = true;
+}
+
+void Cluster::handle_yb_partitions(unsigned generation, const ResultResponse::Ptr& result) {
+  if (generation != yb_partitions_generation_) return; // From a replaced control connection
+  yb_partitions_in_flight_ = false;
+  if (is_closing_) return;
+
+  if (result && result->kind() == CASS_RESULT_KIND_ROWS) {
+    const bool first = !yb_partitions_result_;
+    yb_partitions_result_ = result;
+    if (token_map_) {
+      token_map_ = token_map_->copy();
+      apply_yb_partitions();
+      const YbPartitionMap::ConstPtr& map = token_map_->yb_partitions();
+      if (first) {
+        LOG_INFO("YB partition-aware routing: leader map has %u tables, %u tablets",
+                 static_cast<unsigned int>(map->table_count()),
+                 static_cast<unsigned int>(map->tablet_count()));
+      }
+      notify_or_record(ClusterEvent(token_map_));
+    } else if (first) {
+      LOG_WARN("YB partition-aware routing is enabled but there is no token map (token-aware "
+               "routing and schema metadata must both be enabled); requests will not be routed");
+    }
+  }
+
+  const bool requery = yb_partitions_requery_;
+  yb_partitions_requery_ = false;
+  schedule_yb_partitions_refresh(
+      requery ? 0 : settings_.control_connection_settings.yb_partitions_refresh_interval_ms);
 }
 
 // All hosts from the cluster are included in the host map and in the load
@@ -450,6 +573,12 @@ void Cluster::on_reconnect(ControlConnector* connector) {
       notify_or_record(ClusterEvent(token_map_));
     }
 
+    // Any outstanding partitions query belonged to the old connection; refresh on the new one.
+    ++yb_partitions_generation_;
+    yb_partitions_in_flight_ = false;
+    yb_partitions_requery_ = false;
+    schedule_yb_partitions_refresh(0);
+
     LOG_INFO("Control connection connected to %s", connected_host_->address_string().c_str());
 
     listener_->on_reconnect(this);
@@ -467,6 +596,7 @@ void Cluster::internal_close() {
   bool was_timer_running = timer_.is_running();
   timer_.stop();
   monitor_reporting_timer_.stop();
+  yb_partitions_timer_.stop();
   if (was_timer_running) {
     handle_close();
   } else if (reconnector_) {
@@ -482,6 +612,7 @@ void Cluster::handle_close() {
        it != end; ++it) {
     (*it)->close_handles();
   }
+  yb_partitions_timer_.stop();
   connection_.reset();
   listener_->on_close(this);
   dec_ref();
@@ -617,6 +748,7 @@ void Cluster::notify_host_add_after_prepare(const Host::Ptr& host) {
   if (token_map_) {
     token_map_ = token_map_->copy();
     token_map_->update_host_and_build(host);
+    apply_yb_partitions(); // Resolve leaders against the new host set
     notify_or_record(ClusterEvent(token_map_));
   }
   notify_or_record(ClusterEvent(ClusterEvent::HOST_ADD, host));
@@ -636,6 +768,8 @@ void Cluster::notify_host_remove(const Address& address) {
     token_map_ = token_map_->copy();
     token_map_->remove_host_and_build(host);
     notify_or_record(ClusterEvent(token_map_));
+    // The removed host is still in hosts_ here; refresh so leadership moves off it promptly.
+    schedule_yb_partitions_refresh(0);
   }
 
   // If not marked down yet then explicitly trigger the event.
@@ -706,9 +840,12 @@ void Cluster::on_update_schema(SchemaType type, const ResultResponse::Ptr& resul
         token_map_->update_keyspaces_and_build(connection_->server_version(), result.get());
         notify_or_record(ClusterEvent(token_map_));
       }
+      schedule_yb_partitions_refresh(YB_PARTITIONS_SCHEMA_CHANGE_DELAY_MS);
       break;
     case TABLE:
       metadata_.update_tables(result.get());
+      // A new table's tablets are not in the leader map until the next refresh.
+      schedule_yb_partitions_refresh(YB_PARTITIONS_SCHEMA_CHANGE_DELAY_MS);
       break;
     case VIEW:
       metadata_.update_views(result.get());

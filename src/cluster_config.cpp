@@ -305,6 +305,20 @@ void cass_cluster_set_token_aware_routing(CassCluster* cluster, cass_bool_t enab
   cluster->config().set_token_aware_routing(enabled == cass_true);
 }
 
+void cass_cluster_set_yb_partition_aware_routing(CassCluster* cluster, cass_bool_t enabled) {
+  cluster->config().set_yb_partition_aware_routing(enabled == cass_true);
+}
+
+CassError
+cass_cluster_set_yb_partition_aware_routing_refresh_interval(CassCluster* cluster,
+                                                             unsigned refresh_interval_secs) {
+  if (refresh_interval_secs == 0) {
+    return CASS_ERROR_LIB_BAD_PARAMS;
+  }
+  cluster->config().set_yb_partitions_refresh_interval_secs(refresh_interval_secs);
+  return CASS_OK;
+}
+
 void cass_cluster_set_token_aware_routing_shuffle_replicas(CassCluster* cluster,
                                                            cass_bool_t enabled) {
   cluster->config().set_token_aware_routing_shuffle_replicas(enabled == cass_true);

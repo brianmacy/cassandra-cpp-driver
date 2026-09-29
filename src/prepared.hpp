@@ -47,6 +47,17 @@ public:
   const RequestSettings& request_settings() const { return request_settings_; }
   const ResultResponse::PKIndexVec& key_indices() const { return key_indices_; }
 
+  /**
+   * YugabyteDB partition-aware routing: true when every partition-key bind column has a type
+   * whose wire bytes are its YB hash encoding (see yb_hash_type_supported()), and
+   * yb_ks_table() is the "keyspace.table" the statement targets.
+   */
+  bool yb_routable() const { return yb_routable_; }
+  const String& yb_ks_table() const { return yb_ks_table_; }
+
+private:
+  void compute_yb_routing();
+
 private:
   ResultResponse::ConstPtr result_;
   String id_;
@@ -54,6 +65,8 @@ private:
   String keyspace_;
   RequestSettings request_settings_;
   ResultResponse::PKIndexVec key_indices_;
+  bool yb_routable_;
+  String yb_ks_table_;
 };
 
 class PreparedMetadata {

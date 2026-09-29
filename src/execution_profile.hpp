@@ -31,6 +31,7 @@
 #include "utils.hpp"
 #include "whitelist_dc_policy.hpp"
 #include "whitelist_policy.hpp"
+#include "yb_partition_aware_policy.hpp"
 
 namespace datastax { namespace internal { namespace core {
 
@@ -44,7 +45,8 @@ public:
       , serial_consistency_(CASS_CONSISTENCY_UNKNOWN)
       , latency_aware_routing_(false)
       , token_aware_routing_(true)
-      , token_aware_routing_shuffle_replicas_(true) {}
+      , token_aware_routing_shuffle_replicas_(true)
+      , yb_partition_aware_routing_(CASS_DEFAULT_YB_PARTITION_AWARE_ROUTING) {}
 
   uint64_t request_timeout_ms() const { return request_timeout_ms_; }
 
@@ -91,6 +93,10 @@ public:
   bool token_aware_routing_shuffle_replicas() const {
     return token_aware_routing_shuffle_replicas_;
   }
+
+  bool yb_partition_aware_routing() const { return yb_partition_aware_routing_; }
+
+  void set_yb_partition_aware_routing(bool enabled) { yb_partition_aware_routing_ = enabled; }
 
   ContactPointList& whitelist() { return whitelist_; }
   const ContactPointList& whitelist() const { return whitelist_; }
@@ -140,6 +146,11 @@ public:
       if (latency_aware()) {
         chain = new LatencyAwarePolicy(chain, latency_aware_routing_settings_);
       }
+      // Outermost, so the tablet leader is tried before any host the wrapped policies choose
+      // (every other host costs a tserver-to-leader proxy hop).
+      if (yb_partition_aware_routing_) {
+        chain = new YbPartitionAwarePolicy(chain);
+      }
 
       load_balancing_policy_.reset(chain);
     }
@@ -168,6 +179,7 @@ private:
   LatencyAwarePolicy::Settings latency_aware_routing_settings_;
   bool token_aware_routing_;
   bool token_aware_routing_shuffle_replicas_;
+  bool yb_partition_aware_routing_;
   ContactPointList whitelist_;
   DcList whitelist_dc_;
   LoadBalancingPolicy::Ptr load_balancing_policy_;

@@ -58,6 +58,7 @@ public:
       , log_callback_(stderr_log_callback)
       , log_data_(NULL)
       , auth_provider_(new AuthProvider())
+      , yb_partitions_refresh_interval_secs_(CASS_DEFAULT_YB_PARTITIONS_REFRESH_INTERVAL_SECS)
       , tcp_nodelay_enable_(CASS_DEFAULT_TCP_NO_DELAY_ENABLED)
       , tcp_keepalive_enable_(CASS_DEFAULT_TCP_KEEPALIVE_ENABLED)
       , tcp_keepalive_delay_secs_(CASS_DEFAULT_TCP_KEEPALIVE_DELAY_SECS)
@@ -244,6 +245,20 @@ public:
     default_profile_.set_token_aware_routing_shuffle_replicas(shuffle_replicas);
   }
 
+  bool yb_partition_aware_routing() const { return default_profile().yb_partition_aware_routing(); }
+
+  void set_yb_partition_aware_routing(bool enabled) {
+    default_profile_.set_yb_partition_aware_routing(enabled);
+  }
+
+  unsigned yb_partitions_refresh_interval_secs() const {
+    return yb_partitions_refresh_interval_secs_;
+  }
+
+  void set_yb_partitions_refresh_interval_secs(unsigned secs) {
+    yb_partitions_refresh_interval_secs_ = secs;
+  }
+
   void set_latency_aware_routing(bool is_latency_aware) {
     default_profile_.set_latency_aware_routing(is_latency_aware);
   }
@@ -424,6 +439,7 @@ private:
   void* log_data_;
   AuthProvider::Ptr auth_provider_;
   SslContext::Ptr ssl_context_;
+  unsigned yb_partitions_refresh_interval_secs_;
   bool tcp_nodelay_enable_;
   bool tcp_keepalive_enable_;
   unsigned tcp_keepalive_delay_secs_;
