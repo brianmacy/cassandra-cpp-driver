@@ -2239,6 +2239,13 @@ cass_cluster_set_token_aware_routing_shuffle_replicas(CassCluster* cluster,
                                                       cass_bool_t enabled);
 
 /**
+ * Defined when this driver carries the YugabyteDB partition-aware routing extension
+ * (cass_cluster_set_yb_partition_aware_routing*), so callers can compile against the
+ * stock DataStax driver too.
+ */
+#define CASS_YB_PARTITION_AWARE_ROUTING 1
+
+/**
  * Enable YugabyteDB partition-aware routing (YugabyteDB only; this is a Senzing
  * fork extension, not part of the upstream DataStax API).
  *
