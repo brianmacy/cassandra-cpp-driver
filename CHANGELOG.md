@@ -1,3 +1,13 @@
+Senzing fork (sz-2.17.1)
+===========
+
+See SENZING_FORK.md.
+
+* CASSCPP-3 backport: pure-virtual crash in Session destructor (7174d9af)
+* Guard Async::handle_ against the send/close teardown race (5013b507)
+* YugabyteDB Jenkins hash (cda6d8b7) and partition-aware routing, default OFF (163a0740)
+* CASS_YB_PARTITION_AWARE_ROUTING feature macro (4302a62d)
+
 2.17.1
 ===========
 
